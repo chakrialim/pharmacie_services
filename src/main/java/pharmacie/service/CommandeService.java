@@ -3,6 +3,7 @@ package pharmacie.service;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.NoSuchElementException;
 
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Service;
@@ -17,6 +18,7 @@ import pharmacie.dao.LigneRepository;
 import pharmacie.dao.MedicamentRepository;
 import pharmacie.entity.Commande;
 import pharmacie.entity.Ligne;
+import pharmacie.entity.Medicament;
 
 @Slf4j
 @Service
@@ -100,9 +102,50 @@ public class CommandeService {
      */
     @Transactional
     public Ligne ajouterLigne(int commandeNum, int medicamentRef, @Positive int quantite) {
-        // TODO : implémenter la méthode
-        throw new UnsupportedOperationException("Not implemented yet");
-    }
+
+        Commande commande = commandeDao.findById(commandeNum).orElseThrow(() -> new NoSuchElementException("Commande inexistante"));
+
+        if (commande.getEnvoyeele() != null) {
+            throw new IllegalStateException("La commande a déjà été envoyée");
+        }
+
+        Medicament medicament = medicamentDao.findById(medicamentRef).orElseThrow(() -> new NoSuchElementException("Médicament inexistant"));
+
+        if (medicament.isIndisponible()) {
+            throw new IllegalStateException("Le médicament est indisponible");
+        }
+
+        Ligne ligne = commande.getLignes().stream()
+                .filter(l -> l.getMedicament().equals(medicament))
+                .findFirst()
+                .orElse(null);
+
+        int nouvelleQuantite = quantite;
+
+        if (ligne != null) {
+            nouvelleQuantite += ligne.getQuantite();
+        }
+
+        int totalCommandees = medicament.getUnitesCommandees() + quantite;
+        if (medicament.getUnitesEnStock() < totalCommandees) {
+            throw new IllegalStateException("Stock insuffisant");
+        }
+
+        if (ligne == null) {
+            ligne = new Ligne();
+            ligne.setCommande(commande);
+            ligne.setMedicament(medicament);
+            ligne.setQuantite(quantite);
+            commande.getLignes().add(ligne);
+        } else {
+            ligne.setQuantite(nouvelleQuantite);
+        }
+
+        medicament.setUnitesCommandees(totalCommandees);
+        ligneDao.save(ligne);
+
+        return ligne;
+}
 
     /**
      * <pre>
@@ -118,8 +161,22 @@ public class CommandeService {
      */
     @Transactional
     public void supprimerLigne(int id) {
-        // TODO : implémenter la méthode
-        throw new UnsupportedOperationException("Not implemented yet");
+        log.info("Service : Suppression de la ligne de commande {}", id);
+        
+        var ligne = ligneDao.findById(id).orElseThrow(() -> new NoSuchElementException("Ligne inexistante"));
+        var commande = ligne.getCommande();
+
+        if (commande.getEnvoyeele() != null) {
+            throw new IllegalStateException("La commande a déjà été envoyée");
+        }
+
+        var medicament = ligne.getMedicament();
+        int quantite = ligne.getQuantite();
+        medicament.setUnitesCommandees(medicament.getUnitesCommandees() - quantite);
+        medicamentDao.save(medicament);
+
+        commande.getLignes().remove(ligne);
+        ligneDao.delete(ligne);
     }
 
     /**
@@ -139,8 +196,27 @@ public class CommandeService {
      */
     @Transactional
     public Commande enregistreExpedition(int commandeNum) {
-        // TODO : implémenter la méthode
-        throw new UnsupportedOperationException("Not implemented yet");
+
+        Commande commande = getCommande(commandeNum);
+
+        if (commande.getEnvoyeele() != null) {
+            throw new IllegalStateException("La commande a déjà été envoyée");
+        }
+
+        commande.setEnvoyeele(LocalDate.now());
+
+        for (Ligne ligne : commande.getLignes()) {
+
+            Medicament medicament = ligne.getMedicament();
+            int quantite = ligne.getQuantite();
+            medicament.setUnitesEnStock(
+                medicament.getUnitesEnStock() - quantite
+            );
+            medicament.setUnitesCommandees(
+                medicament.getUnitesCommandees() - quantite
+            );
+        }
+        return commande;
     }
 
     /**
